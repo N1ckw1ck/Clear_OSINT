@@ -1,5 +1,17 @@
 # Clear Web OSINT Toolkit - Quick start guide
 
+## Table of Contents
+
+- [Setup](#setup)
+- [Phone OSINT Tool](#phone-osint-tool)
+- [Domain OSINT Tool](#domain-url-osint-tool)
+
+---
+## Disclaimer
+##### These tools are intended for authorized (where applicable) and ethical (always) use only.
+##### You are responsible for ensuring your use complies with all applicable laws, regulations, and terms of services.
+##### Somewhat unsurprisingly, the author (I) does (do) __not__ assume liability for any misuse.
+---
 ## Setup
 
 #### Assuming you have a recent version of python installed on your system:
@@ -19,10 +31,18 @@
 > Note: If only using one tool, install only what you need by selecting specific packages from `requirements.txt`  
 ---
 
+## Tools
+
+| Tool | File | Description |
+|---|---|---|
+| Phone OSINT | `c_phone_osint.py` | Phone number intelligence, spam detection, geocoding, clearnet mention scan |
+| Domain OSINT | `c_domain_osint.py` | DNS, WHOIS, SSL, HTTP headers, tech fingerprint, risk score, page crawl |
+
+---
 
 ███████████████████████████████████████████████
 ███████████████████████████████████████████████
-## Clear Web Phone OSINT Tool
+## Phone OSINT Tool
 
 ### Usage
 ```bash
@@ -75,7 +95,7 @@ python c_phone_osint.py --save    # Saves full report to JSON after scan complet
 ███████████████████████████████████████████████
 ---
 
-## Clear Web Domain OSINT Tool
+## Domain (URL) OSINT Tool
 
 ### Usage
 ```bash
@@ -84,15 +104,15 @@ python c_domain_osint.py
 
 ### Optional flags
 ```bash
-python c_domain_osint.py --save    # Saves full report to JSON after scan completes
+python c_domain_osint.py --save # Saves full report to JSON after scan completes
 ```
 
 ### Usage flow
 
 1. You will be prompted for the target domain and a max page crawl limit (1-50, default 20)
 2. DNS, WHOIS, SSL, HTTP headers, technology fingerprint, and calculated risk score run automatically
-3. You will be prompted whether to run the IPQS URL threat scan — scrapes the public IPQS results page, no API key required
-4. You will be prompted whether to run the page crawl — visits up to your specified limit of pages on the target domain, collecting emails, internal links, and external domain references
+3. You will be prompted whether to run the URL threat scan
+4. You will be prompted whether to run the page crawl, which visits up to your specified limit of pages on the target domain, collecting emails, internal links, and external domain references
 5. You will be prompted whether to save the report at the end, or pass `--save` to skip the prompt
 
 ### How it works
@@ -102,29 +122,33 @@ python c_domain_osint.py --save    # Saves full report to JSON after scan comple
 - Retrieves and parses the SSL/TLS certificate including issuer, expiry, days remaining, and Subject Alternative Names
 - Fetches HTTP response headers and checks for the presence or absence of key security headers (HSTS, CSP, X-Frame-Options, and more)
 - Fingerprints web technologies from headers and HTML including web server, CMS, JS framework, CDN, and hosting provider
-- Calculates a passive risk score (0-100) derived entirely from already-collected data — no extra network calls
-- Optionally scrapes the IPQS public URL threat scanner for malware, phishing, spam, and risk score data
-- Optionally crawls the target domain breadth-first up to the page limit, extracting emails, mapping internal page links, and cataloguing all referenced external domains
+- Calculates a passive risk score (0-100) derived from already collected data
+- Optionally scrapes public data sources for malware, phishing, spam, and risk score data
+- Optionally crawls the target domain sideways up to the page limit, extracting emails, mapping internal page links, and cataloguing all referenced external domains
 
 ### Screenshots
 
-#### Main report (DNS, WHOIS, SSL, HTTP, Tech Fingerprint, Risk Score):
-![Main Report](assets/domain_main_report.png)
+#### Initial prompts:
+![Startup prompts](assets/domain_startup_prompts.png)
 
-#### IPQS URL threat scan:
-![IPQS URL Scan](assets/domain_ipqs_scan.png)
+#### Main scan:
+![Main scan](assets/domain_main_scan1.png)
+![Main scan](assets/domain_main_scan2.png)
 
 #### Crawl results (emails, external domains, internal links):
 ![Crawl Results](assets/domain_crawl_results.png)
 
 ### Notes
 
-#### The crawl uses a 1 second delay between requests out of politeness to the target server. On sites with many pages, hitting the 50 page cap will be common — this is expected behaviour. The tool will warn you if links were detected but the crawl was stopped early due to the page limit.
+#### The crawl uses a 1 second delay between requests out of politeness to the target server. On sites with many pages, hitting the 50 page cap will happen. The tool will warn you if links were detected but the crawl was stopped early due to the page limit, and you can always raise the limit (carefully).
 
-#### Technology fingerprinting is based on headers and static HTML only. Client-side rendered sites (React, Vue, Angular SPAs) may not reveal their full stack this way, and some detections may be absent or inaccurate if a site actively suppresses identifying headers.
+#### Technology fingerprinting is based on headers and static HTML. Client-side rendered sites may not reveal their full stack this way, and some detections may be absent or inaccurate if the site actively suppresses identifying headers.
 
-#### The IPQS URL threat scan scrapes a public web page rather than using an API. It may break if IPQS changes their page structure, in which case the tool will report the section as unavailable without affecting the rest of the scan.
+#### The URL threat scan scrapes public web pages rather than using an API. It may break if page structures change, in which case the tool should report the section as unavailable without affecting the rest of the scan.
 
-#### WHOIS data availability varies significantly by registrar and TLD. Privacy-protected domains will return minimal registrant information, and some TLDs rate-limit or block WHOIS queries entirely.
+#### Whois data availability varies. Privacy-protected domains will return minimal registrant information, and some TLDs rate-limit or straight up block whois queries entirely.
 
-#### The calculated risk score is a passive heuristic derived from your own scan data. It is not a substitute for a dedicated threat intelligence feed and should be treated as an indicator rather than a definitive assessment.
+#### The calculated risk score is a passive system derived from your own scan data. It is not a substitute for a dedicated threat intelligence feed and should be treated as an indicator rather than a definitive assessment.
+
+---
+███████████████████████████████████████████████
