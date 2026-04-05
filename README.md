@@ -54,6 +54,13 @@ python c_phone_osint.py
 python c_phone_osint.py --save    # Saves full report to JSON after scan completes
 ```
 
+### Necessary setup for full functionality!!
+#### This tool requires two API keys to be able to generate a full report
+#### You need to set these in `c_phone_osint.py`
+1. Generate an IPQS API key and set `IPQS_API_KEY: str = ''  # Put it in here`
+2. Generate a SerpAPI API key and set `SERPAPI_KEY: str = '' # Put it in here`
+> More detailed instructions can be found in the code
+
 ### Usage flow
 
 1. You will be prompted for country code, area code, and the rest of the number separately
