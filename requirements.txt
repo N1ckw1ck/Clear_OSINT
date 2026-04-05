@@ -1,0 +1,11 @@
+# General requirements (all/most tools need)
+requests
+phonenumbers
+
+# c_phone_osint.py specific requirements
+serpapi
+
+# c_url_osint.py specific requirements
+beautifulsoup4
+dnspython
+python-whois
