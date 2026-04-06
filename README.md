@@ -43,7 +43,7 @@
 | Tool | File | Description |
 |---|---|---|
 | Phone OSINT | `c_phone_osint.py` | Phone number intelligence, spam detection, geocoding, clearnet mention scan |
-| Domain OSINT | `c_domain_osint.py` | DNS, WHOIS, SSL, HTTP headers, tech fingerprint, risk score, page crawl |
+| Domain OSINT | `c_domain_osint.py` | DNS, WHOIS, SSL, HTTP headers, tech fingerprint, risk score, page crawl, WP scan |
 | IP OSINT | `c_ip_osint.py` | IP geolocation, ASN & routing, passive DNS, reverse IP, port probe, abuse reputation |
 
 ---
@@ -129,17 +129,22 @@ python c_domain_osint.py --save # Saves full report to JSON after scan completes
 1. You will be prompted for the target domain and a max page crawl limit (1-50, default 20)
 2. DNS, WHOIS, SSL, HTTP headers, technology fingerprint, and calculated risk score run automatically
 3. You will be prompted whether to run the URL threat scan
-4. You will be prompted whether to run the page crawl, which visits up to your specified limit of pages on the target domain, collecting emails, internal links, and external domain references
-5. You will be prompted whether to save the report at the end, or pass `--save` to skip the prompt
+4. You will be prompted whether to run the port scan, which checks 14 common ports via raw socket against the resolved IP
+5. You will be prompted whether to run the page crawl, which visits up to your specified limit of pages on the target domain, collecting emails, internal links, and external domain references
+6. You will be prompted whether to save the report at the end, or pass `--save` to skip the prompt
 
 ### How it works
 
 - Resolves A, PTR (reverse DNS), MX, NS, and TXT records via DNS
 - Fetches WHOIS registration data including registrar, creation date, expiry, and nameservers
 - Retrieves and parses the SSL/TLS certificate including issuer, expiry, days remaining, and Subject Alternative Names
-- Fetches HTTP response headers and checks for the presence or absence of key security headers (HSTS, CSP, X-Frame-Options, and more)
+- Fetches HTTP response headers and checks for the presence or absence of key security headers with vulnerability mapping
+- Probes sensitive paths and reports HTTP status, exposure level, and contextual notes
+- Evaluates content security policy and 
 - Fingerprints web technologies from headers and HTML including web server, CMS, JS framework, CDN, and hosting provider
+- If WordPress is detected, extracts the version from up to 4 sources, maps it against known CVEs, and checks for exposed endpoints
 - Calculates a passive risk score (0-100) derived from already collected data
+- Optionally runs a port scan against the resolved IP across 14 common ports
 - Optionally scrapes public data sources for malware, phishing, spam, and risk score data
 - Optionally crawls the target domain sideways up to the page limit, extracting emails, mapping internal page links, and cataloguing all referenced external domains
 
@@ -149,8 +154,15 @@ python c_domain_osint.py --save # Saves full report to JSON after scan completes
 ![Startup prompts](assets/domain_startup_prompts.png)
 
 #### Main scan:
-![Main scan](assets/domain_main_scan1.png)
-![Main scan](assets/domain_main_scan2.png)
+![Main scan1](assets/domain_main_scan1.png)
+![Main scan2](assets/domain_main_scan2.png)
+![Main scan3](assets/domain_main_scan3.png)
+
+#### Sensitive path probe
+![Sensitive path probe](assets/domain_sensitive_paths.png)
+
+#### Common port scan and status
+![Port scan](assets/domain_port_scanner.png)
 
 #### Crawl results (emails, external domains, internal links):
 ![Crawl Results](assets/domain_crawl_results.png)
@@ -160,6 +172,8 @@ python c_domain_osint.py --save # Saves full report to JSON after scan completes
 #### The crawl uses a 1 second delay between requests out of politeness to the target server. On sites with many pages, hitting the 50 page cap will happen. The tool will warn you if links were detected but the crawl was stopped early due to the page limit, and you can always raise the limit (carefully).
 
 #### Crawling/scraping the internet/specific websites on the internet may or may not be bad and/or wrong and/or illegal and/or against TOSs it's a subjective matter
+
+#### As of Apr. 2026, this tool can scrape websites protected by Cloudflare and other CDNs, extracting emails and links.
 
 #### Technology fingerprinting is based on headers and static HTML. Client-side rendered sites may not reveal their full stack this way, and some detections may be absent or inaccurate if the site actively suppresses identifying headers.
 
