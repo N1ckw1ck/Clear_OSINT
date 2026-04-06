@@ -9,3 +9,7 @@ serpapi
 beautifulsoup4
 dnspython
 python-whois
+
+# exif_tool.py
+Pillow 
+piexif
