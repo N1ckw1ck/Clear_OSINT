@@ -16,7 +16,8 @@
 ### Preface:
 #### Scripts are named fairly self-descriptively, they can all be downloaded _or_ one can pick and choose. If picking and choosing, make sure to also find and install the required dependencies from `requirements.txt`, they are labeled per tool.
 #### `c_phone_osint.py` requires two free API keys to generate a full report, but it will work without them (just returns less data). More detailed instructions below and commented into `c_phone_osint.py`.
-#### `c_ip_osint.py` requires one free API key to generate a full report, again it will work without (just returns less data). Optional paid API key integration for even more data, but this is again not needed. More detailed instructions below and commented into `c_ip_osint.py`.  
+#### `c_ip_osint.py` can be supplemented with one free API key, again it will work without (just returns slightly less data). Optional paid API key integration for even more data, but this is again not needed. More detailed instructions below and commented into `c_ip_osint.py`.  
+#### You can run all of these without creating any API keys at all, just some of them work a little better with.
 ---
 ## Setup
 
@@ -43,7 +44,7 @@
 |---|---|---|
 | Phone OSINT | `c_phone_osint.py` | Phone number intelligence, spam detection, geocoding, clearnet mention scan |
 | Domain OSINT | `c_domain_osint.py` | DNS, WHOIS, SSL, HTTP headers, tech fingerprint, risk score, page crawl |
-| IP OSINT | `c_ip_osint.py` | IP geolocation, ASN & routing, passive DNS, port probe, abuse reputation |
+| IP OSINT | `c_ip_osint.py` | IP geolocation, ASN & routing, passive DNS, reverse IP, port probe, abuse reputation |
 
 ---
 
@@ -91,6 +92,7 @@ python c_phone_osint.py --save # Saves full report to JSON after scan completes
 
 #### What IPQS Key adds to report:
 ![Valid IPQS Key Full Report](assets/full_ipqs_key_report.png)
+> Please note this is an AI generated approximation of what is added to the report when a valid IPQS API key is set, I've been banned from IPQS and am not currently able to access their services (but am ever hopeful this will change)
 
 #### Clearnet mention scan (only works with valid SerpAPI Key):
 ![CLearnet mention scan results](assets/clearnet_mention_scan.png)
@@ -182,8 +184,7 @@ python c_ip_osint.py
 ```bash
 python c_ip_osint.py --save # Saves full report to JSON after scan completes
 ```
-
-### (sort of) Necessary setup for full functionality!!
+---
 #### This tool supports two optional API keys for additional output
 #### You can set these in `c_ip_osint.py`
 1. Generate an AbuseIPDB API key and set `ABUSEIPDB_API_KEY: str = ''`
@@ -196,10 +197,15 @@ python c_ip_osint.py --save # Saves full report to JSON after scan completes
 
 1. You will be prompted for a target IP address (IPv4 or IPv6)
 2. If the IP is private or loopback, a local interface scan runs and the tool exits
-3. For public IPs, geolocation, ASN, routing, and passive DNS run automatically
-4. AbuseIPDB and Shodan enrichment run automatically if API keys are set
-5. You will be prompted whether to run a common port probe
-6. You will be prompted whether to save the report, or pass `--save` to skip the prompt
+3. For public IPs, geolocation, ASN, routing, passive DNS, and reverse IP lookup run automatically
+4. AbuseIPDB and Shodan enrichment run automatically if API keys are set (it's okay if they aren't)
+5. You will be prompted whether to run a ICMP ping of 10 packets
+6. You will be prompted whether to run a common port probe
+7. You will be prompted whether to save the report, or pass `--save` to skip the prompt
+> Unless the terms of the website change, you should be able to test this tool with `45.33.32.156 ` or `2600:3c01::f03c:91ff:fe18:bb2f` (same thing) which is for http://scanme.nmap.org
+
+#### Important: this script can be ran 100 times per day per IP before the reverse IP section of the report may stop working, and 1,000 times per day per IP before the geocoding/ASN resolution part will stop working. This is due to Hackertarget and Ipapi free tier limits respectively.
+#### TLDR: just don't run `c_ip_osint.py` more than 100 times in one day.
 
 ### How it works
 
@@ -211,8 +217,11 @@ python c_ip_osint.py --save # Saves full report to JSON after scan completes
 - If valid AbuseIPDB key is set, retrieves the abuse confidence score, total reports, distinct reporters, and usage type for the IP
 - Checks the target IP against the Tor Project's published bulk exit node list
 - Classifies the host as datacenter/cloud, residential ISP, or mobile carrier based on ASN name, org string, and BGP prefix size, with confidence level and supporting signals
+- Performs reverse IP lookup by querying HackerTarget, extracting TLS certificate SANs, and cross-referencing Shodan and passive DNS records to enumerate domains hosted on the target. Each discovered domain is subsequently HTTP-probed with a spoofed Host header to confirm live services, surfacing page titles and status codes.
 - If valid Shodan key is set, retrieves open ports, service banners, hostnames, OS, and tags from Shodan's crawl data
+- Optionally sends ICMP requests to measure round-trip time and jitter, will display latency and packet loss, with a note if the host appears to be filtering ICMP
 - Optionally probes ~24 common ports via direct TCP connect with concurrent threads, with banner grabbing on text-protocol ports
+Performs a multi-source reverse IP lookup by . 
 
 ### Screenshots
 
@@ -223,6 +232,12 @@ python c_ip_osint.py --save # Saves full report to JSON after scan completes
 ![p1](assets/asn_dns_ip_report.png)
 ![p2](assets/ad_ip_report_p2.png)
 > Turns out I no longer have access to a Shodan API key, it really doesn't matter all that much not to have one though. 
+
+#### Reverse IP and domain mapping
+![Reverse IP](assets/reverse_ip_report.png)
+
+#### ICMP pings
+![ICMP](assets/icmp_ip_report.png)
 
 #### Port scan (and save):
 ![Port Scan](assets/port_scan_save_ip_report.png)

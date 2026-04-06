@@ -192,6 +192,12 @@ class DnsChainResult:
     nameservers: list[str]
 
 @dataclass
+class DomainDiscovery:
+    domains: list[str]
+    source_map: dict[str, list[str]]
+    probed: list[dict[str, str]] 
+
+@dataclass
 class PortResult:
     port: int
     service: str
@@ -224,6 +230,18 @@ class AbuseInfo:
     is_whitelisted: bool
 
 @dataclass
+class PingResult:
+    packets_sent: int
+    packets_received: int
+    packet_loss_pct: float
+    rtt_min_ms: float
+    rtt_avg_ms: float
+    rtt_max_ms: float
+    rtt_mdev_ms: float # Jitter
+    raw_output: str
+    error: str
+
+@dataclass
 class IpReport:
     target: str
     scan_time: str
@@ -236,11 +254,13 @@ class IpReport:
     asn_detail: AsnDetail | None
     passive_dns: list[PassiveDnsEntry]
     dns_chain: DnsChainResult | None
+    domain_discovery: DomainDiscovery | None
     ports: list[PortResult]
     hosting_class: HostingClassification | None
     is_tor: bool
     shodan: ShodanInfo | None
     abuse: AbuseInfo | None
+    ping: PingResult | None
 
 
 # IP classification and input
@@ -600,6 +620,193 @@ def classify_hosting(asn_name: str, org: str, prefix: str) -> HostingClassificat
     else:
         return HostingClassification(category='Unknown', confidence='Low', signals=signals or ['No matching signals found'])
 
+# Hackertarget reverse ip
+#  Docs: https://hackertarget.com/reverse-ip-lookup/
+def fetch_hackertarget_reverseip(ip: str) -> list[str]:
+    '''
+    Free reverse-IP lookup via HackerTarget.
+    No API key needed. ~100 req/day free tier.
+    Return a list of domain names hosted on the IP.
+    '''
+    url = f'https://api.hackertarget.com/reverseiplookup/?q={ip}'
+    try:
+        r = requests.get(url, timeout=10, headers={'User-Agent': 'ip-osint-tool/1.0'})
+        r.raise_for_status()
+        text = r.text.strip()
+    except Exception as e:
+        print(f'\n  {R}HackerTarget request failed: {e}{RESET}')
+        return []
+
+    # API returns "No records found" or "error" on failure
+    if 'no records' in text.lower() or 'error' in text.lower() or not text:
+        return []
+
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+# TLS certificate SAN extraction
+def fetch_tls_san_domains(ip: str, port: int = 443, timeout: float = 5.0) -> list[str]:
+    '''
+    Connect to the IP on port 443, retrieve TLS certificate,
+    and extract all Subject Alternative Names (SANs).
+    Uses stdlib ssl only.
+    Returns a list of domain names from the cert's SAN field.
+    '''
+    import ssl
+    import socket as _socket
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE # Just want the cert data, not to verify it
+
+    domains: list[str] = []
+    try:
+        with _socket.create_connection((ip, port), timeout=timeout) as raw_sock:
+            with ctx.wrap_socket(raw_sock, server_hostname=ip) as tls_sock:
+                cert: dict[str, Any] | None = tls_sock.getpeercert()
+                if cert is None:
+                    return []
+                # subjectAltName is a tuple of (type, value) pairs like ('DNS', 'example.com')
+                sans: list[tuple[str, str]] = list(cert.get('subjectAltName', []))
+                for kind, value in sans:
+                    kind_str: str = str(kind)
+                    value_str: str = str(value)
+                    if kind_str == 'DNS':
+                        # removeprefix only strips the literal '*.' prefix unlike lstrip
+                        # which would strip any leading '*' or '.' characters individually
+                        clean: str = value_str.removeprefix('*.').strip()
+                        if clean:
+                            domains.append(clean)
+    except Exception as e:
+        print(f'  {DIM}TLS SAN extraction skipped: {e}{RESET}')
+
+    return list(dict.fromkeys(domains)) # Preserve order, dedupe
+
+# HTTP/HTTPS probe per domain
+def _probe_domain_http(ip: str, domain: str, timeout: float = 6.0) -> dict[str, str]:
+    '''
+    Send an HTTP/HTTPS request to the IP with the given Host header.
+    Extracts status code, page title, and final URL after redirects.
+    Returns a dict with keys: domain, url, status, title, redirect.
+    '''
+    import re as _re
+
+    result: dict[str, str] = {
+        'domain': domain,
+        'url': f'https://{domain}',
+        'status': 'N/A',
+        'title': 'N/A',
+        'redirect': '',
+        'error': '',
+    }
+
+    for scheme in ('https', 'http'):
+        target_url = f'{scheme}://{ip}'
+        headers = {
+            'Host': domain,
+            'User-Agent': 'Mozilla/5.0 (compatible; ip-osint-tool/1.0)', # Iffy
+            'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        }
+        try:
+            resp = requests.get(
+                target_url,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True,
+                verify=False, # Cert likely won't match IP that's okay we just want content
+            )
+            result['status'] = str(resp.status_code)
+            result['url'] = f'{scheme}://{domain}'
+
+            # Check if it followed a redirect to a different domain
+            if resp.url and domain not in resp.url:
+                result['redirect'] = resp.url[:120]
+
+            # Extract <title> from response body
+            html = resp.text[:8192]  # Only need the <head>
+            title_match = _re.search(r'<title[^>]*>([^<]{1,200})</title>', html, _re.IGNORECASE)
+            if title_match:
+                result['title'] = title_match.group(1).strip()[:120]
+
+            return result # Got a response so don't try http fallback
+
+        except requests.exceptions.SSLError:
+            continue # Try http
+        except Exception as e:
+            result['error'] = str(e)[:80]
+            return result
+
+    return result
+
+def probe_domains_http(ip: str, domains: list[str], max_workers: int = 10) -> list[dict[str, str]]:
+    '''
+    Concurrently probe each domain in the list via HTTP/HTTPS Host-header injection.
+    Returns only domains that returned a real response (status != N/A).
+    '''
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning) # Expected (didn't verify)
+
+    results: list[dict[str, str]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_probe_domain_http, ip, d): d for d in domains}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res['status'] != 'N/A':
+                results.append(res)
+
+    return sorted(results, key=lambda r: r['domain'])
+
+# Orchestrator discovers and probes all domains
+def discover_domains(
+    ip: str,
+    rdns: str,
+    passive_dns: list[PassiveDnsEntry],
+    shodan: 'ShodanInfo | None',
+) -> DomainDiscovery:
+    '''
+    Aggregate domain names from all available sources, deduplicate,
+    then HTTP probe each to confirm live services.
+    '''
+    source_map: dict[str, list[str]] = {
+        'hackertarget': [],
+        'tls_san': [],
+        'shodan': [],
+        'passive_dns': [],
+        'rdns': [],
+    }
+
+    print(f'{DIM}  → HackerTarget reverse IP...{RESET}')
+    source_map['hackertarget'] = fetch_hackertarget_reverseip(ip)
+
+    print(f'{DIM}  → TLS certificate SAN extraction (port 443)...{RESET}')
+    source_map['tls_san'] = fetch_tls_san_domains(ip)
+
+    if shodan:
+        source_map['shodan'] = list(shodan.hostnames) + list(shodan.domains)
+
+    source_map['passive_dns'] = [e.rrname for e in passive_dns if e.rrname]
+
+    if rdns and rdns != 'N/A':
+        source_map['rdns'] = [rdns]
+
+    # Union + deduplicate, preserving rough priority order
+    seen: set[str] = set()
+    all_domains: list[str] = []
+    for source_domains in source_map.values():
+        for d in source_domains:
+            d_clean = d.strip().rstrip('.').lower()
+            if d_clean and d_clean not in seen:
+                seen.add(d_clean)
+                all_domains.append(d_clean)
+
+    print(f'{DIM}  → HTTP probing {len(all_domains)} unique domains...{RESET}')
+    probed = probe_domains_http(ip, all_domains) if all_domains else []
+
+    return DomainDiscovery(
+        domains=all_domains,
+        source_map=source_map,
+        probed=probed,
+    )
+
 # Port probe (TCP connect, if not Shodan)
 def _probe_port(ip: str, port: int, service: str) -> PortResult:
     '''Attempt a TCP connect to one port. Grab a banner if possible.'''
@@ -631,7 +838,6 @@ def probe_common_ports(ip: str) -> list[PortResult]:
             if result.open:
                 results.append(result)
     return sorted(results, key=lambda r: r.port)
-
 
 # Shodan (optional with paid API key)
 # Docs: https://developer.shodan.io/api
@@ -714,6 +920,104 @@ def fetch_abuseipdb(ip: str, api_key: str) -> AbuseInfo | None:
         last_reported_at=s('lastReportedAt'),
         is_whitelisted=bool(d.get('isWhitelisted', False)),
     )
+
+# Why subprocess over a Python ICMP library:
+#  - Raw ICMP sockets require root on most systems
+#  - The system ping binary has the setuid bit set and makes it easy
+#  - No extra dependencies!
+def run_ping(ip: str, count: int = 10) -> PingResult:
+    '''
+    Send count ICMP echo requests via the system ping binary.
+    Parses RTT statistics from the summary line,
+    should work on Linux and macOS.
+    Falls back semi gracefully if ping is not available or the host blocks ICMP.
+    '''
+    import subprocess
+    import re as _re
+    import sys as _sys
+
+    empty = PingResult(
+        packets_sent=count,
+        packets_received=0,
+        packet_loss_pct=100.0,
+        rtt_min_ms=0.0,
+        rtt_avg_ms=0.0,
+        rtt_max_ms=0.0,
+        rtt_mdev_ms=0.0,
+        raw_output='',
+        error='',
+    )
+
+    # Build the command — macOS uses -c for count same as linux
+    # -W / -w: per-packet timeout. macOS uses -W (ms), Linux uses -W (s)
+    # There is likely a better way to handle this
+    if _sys.platform == 'darwin':
+        cmd = ['ping', '-c', str(count), '-W', '1000', ip]
+    else:
+        cmd = ['ping', '-c', str(count), '-W', '1', ip]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=count * 3, # Should be generous enough
+        )
+        output = proc.stdout + proc.stderr
+        empty.raw_output = output.strip()
+    except FileNotFoundError:
+        empty.error = 'ping binary not found'
+        return empty
+    except subprocess.TimeoutExpired:
+        empty.error = 'ping timed out'
+        return empty
+    except Exception as e:
+        empty.error = str(e)
+        return empty
+
+    # Parse packet loss
+    # Linux: "10 packets transmitted, 8 received, 20% packet loss"
+    # macOS: "10 packets transmitted, 8 packets received, 20.0% packet loss"
+    loss_match = _re.search(
+        r'(\d+) packets transmitted,\s*(\d+) (?:packets )?received,\s*([\d.]+)%',
+        output,
+    )
+    received = 0
+    loss_pct = 100.0
+    if loss_match:
+        sent_parsed = int(loss_match.group(1))
+        received = int(loss_match.group(2))
+        loss_pct = float(loss_match.group(3))
+    else:
+        sent_parsed = count
+
+    # Parse RTT statistics
+    # Linux: "rtt min/avg/max/mdev = 12.3/15.1/18.4/1.2 ms"
+    # macOS: "round-trip min/avg/max/stddev = 12.3/15.1/18.4/1.2 ms"
+    rtt_min = rtt_avg = rtt_max = rtt_mdev = 0.0
+    rtt_match = _re.search(
+        r'(?:rtt|round-trip)\s+min/avg/max/(?:mdev|stddev)\s*=\s*'
+        r'([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)',
+        output,
+    )
+    if rtt_match:
+        rtt_min   = float(rtt_match.group(1))
+        rtt_avg   = float(rtt_match.group(2))
+        rtt_max   = float(rtt_match.group(3))
+        rtt_mdev  = float(rtt_match.group(4))
+
+    return PingResult(
+        packets_sent=sent_parsed,
+        packets_received=received,
+        packet_loss_pct=loss_pct,
+        rtt_min_ms=rtt_min,
+        rtt_avg_ms=rtt_avg,
+        rtt_max_ms=rtt_max,
+        rtt_mdev_ms=rtt_mdev,
+        raw_output=output.strip(),
+        error='',
+    )
+
 
 # Print sections
 def print_local_section(local: LocalInfo) -> None:
@@ -835,6 +1139,55 @@ def print_dns_chain_section(chain: DnsChainResult) -> None:
         if len(chain.authoritative_nameservers) > 10:
             print(f'    {DIM}... and {len(chain.authoritative_nameservers) - 10} more{RESET}')
 
+def print_domain_discovery_section(discovery: DomainDiscovery) -> None:
+    print_section('REVERSE IP → DOMAIN DISCOVERY')
+
+    # Break it down now
+    for source, domains in discovery.source_map.items():
+        if domains:
+            label = {
+                'hackertarget': 'HackerTarget',
+                'tls_san': 'TLS cert SAN',
+                'shodan': 'Shodan',
+                'passive_dns': 'Passive DNS',
+                'rdns': 'Reverse DNS',
+            }.get(source, source)
+            print_field(f'{label}:', f'{len(domains)} domain(s)', DIM + W)
+
+    print_field('Total unique domains:', str(len(discovery.domains)))
+
+    if not discovery.probed:
+        print(f'\n  {DIM}No live HTTP responses from discovered domains.{RESET}')
+        return
+
+    print(f'\n  {DIM}{"─" * 20} Live services {"─" * 16}{RESET}')
+    print(f'  {DIM}{"Domain":<40} {"Status":<8} {"Title":<40} URL{RESET}')
+    print(f'  {DIM}{"─" * 100}{RESET}')
+
+    for entry in discovery.probed:
+        status = entry.get('status', 'N/A')
+        status_color = G if status.startswith('2') else Y if status.startswith('3') else R
+        domain = entry.get('domain', '')[:38]
+        title  = entry.get('title', 'N/A')[:38]
+        url = entry.get('url', '')
+
+        print(
+            f'  {C}{domain:<40}{RESET}'
+            f'{status_color}{status:<8}{RESET}'
+            f'{W}{title:<40}{RESET}'
+            f'{DIM}{url}{RESET}'
+        )
+        if entry.get('redirect'):
+            print(f'  {DIM}    ↳ redirects to: {entry["redirect"]}{RESET}')
+
+    # Handy clickable links summary
+    print(f'\n  {DIM}{"─" * 20} URLs {"─" * 25}{RESET}')
+    for entry in discovery.probed:
+        if entry.get('status', '').startswith('2'):
+            print(f'  {G}↳ {entry["url"]}{RESET}')
+        elif entry.get('status') not in ('N/A', ''):
+            print(f'  {Y}↳ {entry["url"]}  ({entry["status"]}){RESET}')
+
 def print_port_section(ports: list[PortResult]) -> None:
     print_section('COMMON PORT PROBE  (direct TCP)')
     if not ports:
@@ -917,6 +1270,36 @@ def print_abuse_section(abuse: AbuseInfo) -> None:
     print_field('Usage Type:', abuse.usage_type)
     print_field('Country:', abuse.country_code)
 
+def print_ping_section(ping: PingResult) -> None:
+    print_section('ICMP PING  (RTT & Packet Loss)')
+
+    if ping.error:
+        print(f'  {R}Ping failed: {ping.error}{RESET}')
+        return
+
+    loss = ping.packet_loss_pct
+    loss_color = G if loss == 0 else Y if loss < 30 else R
+    recv_color = G if ping.packets_received == ping.packets_sent else Y if ping.packets_received > 0 else R
+
+    print_field('Packets sent:', str(ping.packets_sent))
+    print_field('Packets received:', str(ping.packets_received), recv_color)
+    print_field('Packet loss:', f'{loss:.1f}%', loss_color)
+
+    if ping.packets_received == 0:
+        print(f'\n  {Y}Host did not respond to ICMP — may be filtered by firewall.{RESET}')
+        return
+
+    # RTT coloring: green <50ms, yellow <150ms, red >=150ms
+    def rtt_color(ms: float) -> str:
+        return G if ms < 50 else Y if ms < 150 else R
+
+    print()
+    print_field('RTT min:', f'{ping.rtt_min_ms:.2f} ms', rtt_color(ping.rtt_min_ms))
+    print_field('RTT avg:', f'{ping.rtt_avg_ms:.2f} ms', rtt_color(ping.rtt_avg_ms))
+    print_field('RTT max:', f'{ping.rtt_max_ms:.2f} ms', rtt_color(ping.rtt_max_ms))
+    print_field('Jitter (mdev):', f'{ping.rtt_mdev_ms:.2f} ms',
+                G if ping.rtt_mdev_ms < 5 else Y if ping.rtt_mdev_ms < 20 else R)
+
 # Save
 def save_report(report: IpReport) -> None:
     '''Save full report to JSON.'''
@@ -932,11 +1315,13 @@ def save_report(report: IpReport) -> None:
         'asn_detail': asdict(report.asn_detail) if report.asn_detail else None,
         'passive_dns': [asdict(e) for e in report.passive_dns],
         'dns_chain': asdict(report.dns_chain) if report.dns_chain else None,
+        'domain_discovery': asdict(report.domain_discovery) if report.domain_discovery else None,
         'ports': [asdict(p) for p in report.ports],
         'hosting_class': asdict(report.hosting_class) if report.hosting_class else None,
         'is_tor': report.is_tor,
         'shodan': asdict(report.shodan) if report.shodan else None,
         'abuse': asdict(report.abuse) if report.abuse else None,
+        'ping': asdict(report.ping) if report.ping else None,
     }
     safe_ip = report.target.replace(':', '_').replace('.', '_') # :.
     filename = f'ip_osint_{safe_ip}.json'
@@ -1012,15 +1397,6 @@ def main() -> None:
         print(f'{DIM}Fetching DNS chain for {dns_chain_target}...{RESET}')
         dns_chain = fetch_dns_chain(dns_chain_target)
 
-    print(f'{DIM}Checking Tor exit node list...{RESET}')
-    is_tor: bool = check_tor_exit(ip_str)
-
-    print(f'{DIM}Classifying host type...{RESET}')
-    asn_name: str = ripe.asn_name if ripe else ''
-    org: str = geo.org if geo else ''
-    prefix: str = ripe.prefix if ripe else 'N/A'
-    hosting_class: HostingClassification = classify_hosting(asn_name, org, prefix)
-
     # Optional: Shodan
     shodan: ShodanInfo | None = None
     if SHODAN_API_KEY.strip():
@@ -1032,6 +1408,18 @@ def main() -> None:
     if ABUSEIPDB_API_KEY.strip():
         print(f'{DIM}Querying AbuseIPDB...{RESET}')
         abuse = fetch_abuseipdb(ip_str, ABUSEIPDB_API_KEY)
+
+    print(f'{DIM}Discovering hosted domains (reverse IP)...{RESET}')
+    domain_discovery = discover_domains(ip_str, rdns, passive_dns, shodan)
+
+    print(f'{DIM}Checking Tor exit node list...{RESET}')
+    is_tor: bool = check_tor_exit(ip_str)
+
+    print(f'{DIM}Classifying host type...{RESET}')
+    asn_name: str = ripe.asn_name if ripe else ''
+    org: str = geo.org if geo else ''
+    prefix: str = ripe.prefix if ripe else 'N/A'
+    hosting_class: HostingClassification = classify_hosting(asn_name, org, prefix)
 
     # Assemble report (no ports yet - prompt next)
     report = IpReport(
@@ -1046,11 +1434,13 @@ def main() -> None:
         asn_detail=asn_detail,
         passive_dns=passive_dns,
         dns_chain=dns_chain,
+        domain_discovery=domain_discovery,
         ports=[],
         hosting_class=hosting_class,
         is_tor=is_tor,
         shodan=shodan,
         abuse=abuse,
+        ping=None,
     )
 
     # Print core report
@@ -1072,6 +1462,9 @@ def main() -> None:
     if report.dns_chain:
         print_dns_chain_section(report.dns_chain)
 
+    if report.domain_discovery:
+        print_domain_discovery_section(report.domain_discovery)
+
     if shodan:
         print_shodan_section(shodan)
     elif not SHODAN_API_KEY.strip():
@@ -1082,15 +1475,20 @@ def main() -> None:
     elif not ABUSEIPDB_API_KEY.strip():
         print(f'\n  {DIM}AbuseIPDB enrichment skipped (no API key set).{RESET}')
 
+    # Ping
+    print(f'\n{Y}Run ICMP ping? Sends {10} packets to measure RTT and packet loss.{RESET}')
+    ping_choice = input(f'{C}> Ping target? [y/N]: {RESET}').strip().lower()
+    if ping_choice == 'y':
+        print(f'\n{DIM}Pinging {ip_str}...{RESET}')
+        report.ping = run_ping(ip_str, count=10)
+        print_ping_section(report.ping)
+
     # Optional port probe
     print(f'\n{Y}Run common port probe? Checks {len(COMMON_PORTS)} ports via direct TCP connect.{RESET}')
-
     # Skip port prompt if Shodan already has port data
     if shodan and shodan.open_ports:
         print(f'{DIM}  (Shodan already provided port data — probe still available if wanted){RESET}')
-
     port_choice = input(f'{C}> Probe common ports? [y/N]: {RESET}').strip().lower()
-
     if port_choice == 'y':
         print(f'\n{DIM}Probing {len(COMMON_PORTS)} common ports (concurrent, {PORT_TIMEOUT}s timeout)...{RESET}')
         report.ports = probe_common_ports(ip_str)
