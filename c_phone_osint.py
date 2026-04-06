@@ -651,7 +651,6 @@ def print_web_section(web: WebScanResult) -> None:
             print(f'      {DIM}Snippet: {RESET}{DIM}{snippet}{RESET}')
 
 def print_report(raw_input: str, local: LocalAnalysis, spam: SpamResult | None, geo: GeoResult | None, ipqs: IpqsResult | None) -> None:
-    print(BANNER)
     print(f'{DIM} Scan time : {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}{RESET}')
     print(f'{DIM} Target    : {raw_input}{RESET}')
 
@@ -682,6 +681,8 @@ def save_report(local: LocalAnalysis, spam: SpamResult | None, geo: GeoResult | 
 
 def main() -> None:
     save = '--save' in sys.argv
+
+    print(BANNER)
 
     raw = get_phone_input()
 

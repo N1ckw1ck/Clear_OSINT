@@ -957,7 +957,6 @@ def print_crawl_section(crawl_result: CrawlResult) -> None:
         print(f'    {DIM}... and {len(crawl_result.internal_links) - 30} more (save report for full list){RESET}')
 
 def print_report(report: DomainReport) -> None:
-    print(BANNER)
     print(f'{DIM}  Scan time : {report.scan_time}{RESET}')
     print(f'{DIM}  Target    : {report.target}{RESET}')
 
@@ -1005,6 +1004,8 @@ def save_report(report: DomainReport) -> None:
 # Maim
 def main() -> None:
     save = '--save' in sys.argv
+
+    print(BANNER)
 
     domain, max_pages = get_domain_input()
 

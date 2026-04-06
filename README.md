@@ -58,7 +58,7 @@ python c_phone_osint.py
 
 ### Optional flags
 ```bash
-python c_phone_osint.py --save    # Saves full report to JSON after scan completes
+python c_phone_osint.py --save # Saves full report to JSON after scan completes
 ```
 
 ### (sort of) Necessary setup for full functionality!!
