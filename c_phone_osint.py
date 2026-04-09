@@ -449,7 +449,7 @@ def fetch_web_mentions(local: LocalAnalysis, serpapi_key: str) -> WebScanResult 
     Deduplicates results by URL across both engines.
     Costs 2 API calls per scan.
     '''
-    import serpapi  # type: ignore
+    import serpapi # type: ignore
 
     national_clean = local.national.strip()
     e164_clean = local.e164.strip()

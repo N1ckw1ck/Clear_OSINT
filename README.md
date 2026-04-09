@@ -93,7 +93,6 @@ python c_phone_osint.py --save # Saves full report to JSON after scan completes
 
 #### What IPQS Key adds to report:
 ![Valid IPQS Key Full Report](assets/full_ipqs_key_report.png)
-> Please note this is an AI generated approximation of what is added to the report when a valid IPQS API key is set, I've been banned from IPQS and am not currently able to access their services (but am ever hopeful this will change)
 
 #### Clearnet mention scan (only works with valid SerpAPI Key):
 ![CLearnet mention scan results](assets/clearnet_mention_scan.png)
