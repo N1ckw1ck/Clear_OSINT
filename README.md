@@ -1,4 +1,3 @@
-![p1](assets/Clear_OSINT_Banner.png)
 # Clear Web OSINT Toolkit - Quick start guide
 
 ## Table of Contents
