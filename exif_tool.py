@@ -8,7 +8,8 @@ Dependencies:
 Usage:
     python exif_tool.py photo.jpg
     python exif_tool.py photo1.jpg path/to/photo2.png path/to/photo3.jpg
-    python exif_tool.py # interactive mode (prompts for paths)
+    python exif_tool.py folder_of_photos  # will pull any/all compatible photos in the folder
+    python exif_tool.py  # interactive mode (prompts for paths)
 """
 
 # Each image is scanned and EXIF fields printed. You are then prompted to strip, add, or edit metadata.
@@ -33,6 +34,12 @@ except ImportError:
     print('Install them with: pip install Pillow piexif')
     sys.exit(1)
 
+
+# Exit Codes
+EXIT_OK          = 0
+EXIT_INTERRUPTED = 130
+EXIT_NO_FILES    = 1
+EXIT_PARTIAL     = 2
 
 # Dataclasses
 @dataclass
@@ -279,6 +286,7 @@ def write_exif(path: Path, updates: dict[str, str], wipe: bool = False) -> tuple
     piexif_formats = {'JPEG', 'TIFF'}
 
     if fmt not in piexif_formats:
+        errors: list[str] = [] # so definitely not unbound
         # Pillow-only path: load existing via Pillow, merge, save back
         if wipe:
             exif_bytes = b''
@@ -309,7 +317,10 @@ def write_exif(path: Path, updates: dict[str, str], wipe: bool = False) -> tuple
                 image.save(path, exif=exif_bytes)
             else:
                 image.save(path)
-            return True, 'EXIF written.'
+            msg = 'EXIF written.'
+            if errors:
+                msg += '  Warnings: ' + '; '.join(errors)
+            return True, msg
         except Exception as exc:
             return False, f'Failed to save image: {exc}'
 
@@ -489,6 +500,23 @@ def prompt_add_exif(path: Path) -> None:
 
 
 # Entry point
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({
+    '.jpg', '.jpeg', '.tiff', '.tif', '.png', '.webp', '.heic', '.bmp'
+})
+
+def expand_paths(raw_paths: list[Path]) -> list[Path]:
+    """expand a directory to its supported image files"""
+    expanded: list[Path] = []
+    for p in raw_paths:
+        if p.is_dir():
+            found = sorted(f for f in p.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS)
+            if not found:
+                print(f'  {YELLOW}No supported images found in {p}{RESET}')
+            expanded.extend(found)
+        else:
+            expanded.append(p)
+    return expanded
+
 def collect_paths_interactive() -> list[Path]:
     """Prompt the user for file paths until they enter a blank line."""
     print(f'{BOLD}EXIF Tool{RESET} — enter image paths one per line, blank line to finish.\n')
@@ -496,9 +524,12 @@ def collect_paths_interactive() -> list[Path]:
     while True:
         try:
             raw = input('  Image path: ').strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             print()
             break
+        except KeyboardInterrupt:
+            print()
+            sys.exit(EXIT_INTERRUPTED)
         if not raw:
             break
         paths.append(Path(raw))
@@ -513,8 +544,9 @@ def main() -> None:
 
     if not paths:
         print('No files provided. Exiting.')
-        sys.exit(0)
+        sys.exit(EXIT_NO_FILES)
 
+    paths = expand_paths(paths)
     reports = [read_exif(p) for p in paths]
 
     for report in reports:
@@ -522,7 +554,9 @@ def main() -> None:
         prompt_strip(report)
         prompt_add_exif(report.path)
 
+    had_errors = any(r.error is not None for r in reports)
     print()
+    sys.exit(EXIT_PARTIAL if had_errors else EXIT_OK)
 
 
 if __name__ == '__main__':

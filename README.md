@@ -6,6 +6,7 @@
 - [Phone OSINT Tool](#phone-osint-tool)
 - [Domain OSINT Tool](#domain-url-osint-tool)
 - [IP OSINT Tool](#ip-osint-tool)
+- [EXIF Tool](#exif-tool)
 
 ---
 ## Disclaimer
@@ -45,6 +46,7 @@
 | Phone OSINT | `c_phone_osint.py` | Phone number intelligence, spam detection, geocoding, clearnet mention scan |
 | Domain OSINT | `c_domain_osint.py` | DNS, WHOIS, SSL, HTTP headers, tech fingerprint, risk score, page crawl, WP scan |
 | IP OSINT | `c_ip_osint.py` | IP geolocation, ASN & routing, passive DNS, reverse IP, port probe, abuse reputation |
+| EXIF Tool | `exif_tool.py` | Read, display, add to, and optionally strip EXIF metadata from images |
 
 ---
 
@@ -271,3 +273,32 @@ Performs a multi-source reverse IP lookup by .
 #### A score of 0 does not guarantee an IP is clean, 100 does not mean it is necessarily dirty
 
 ---
+
+███████████████████████████████████████████████
+███████████████████████████████████████████████
+## EXIF Tool
+
+### Usage
+```bash
+python exif_tool.py photo.jpg
+python exif_tool.py photo1.jpg path/to/photo2.png path/to/photo3.webp
+python exif_tool.py folder_of_photos  # will pull any/all compatible photos in the folder
+python exif_tool.py  # interactive mode (prompts for paths)
+```
+
+### Usage flow
+1. Run `python exif_tool.py photo.jpg [photo2.png] [folder/]` or run with no args for interactive path entry
+2. Exif fields are printed for each image
+3. You will be prompted to strip EXIF data: `y` strips with backup, `b` strips without, enter (`N`) skips
+4. You will be prompted to add/edit EXIF fields: choose merge (preserve existing) or wipe (clear all existing first), then select fields from the menu one at a time; `d` to confirm and write changes
+
+
+### How it works
+- Reads EXIF metadata via Pillow
+- Strips via piexif for JPEG/TIFF, pixel-copy fallback for PNG and other formats
+- Writes via piexif for JPEG/TIFF, EXIF byte injection for PNG
+- When passing a folder as an argument, folder input auto-detects supported image files (.jpg, .png, .tiff, .webp, .bmp, .heic)
+
+### Notes
+- Backups get saved as `<name>.backup.<ext>` next to the original file
+- Exit codes (work in progress): 0 = ok, 1 = no files found, 2 = one or more files had errors
